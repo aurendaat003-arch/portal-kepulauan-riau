@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PORTAL - Bakesbangpol Kepri</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+        body { font-family: sans-serif; background-color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); width: 100%; max-width: 400px; text-align: center; }
+        .hidden { display: none !important; }
+        button { width: 100%; padding: 12px; background: #0284c7; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .progress { background: #e2e8f0; border-radius: 10px; height: 10px; overflow: hidden; margin-top: 15px; }
+        .bar { background: #10b981; width: 0%; height: 100%; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <!-- SEKSI LOGIN -->
+    <div id="loginSection">
+        <h2>PORTAL</h2>
+        <p>Badan Kesatuan Bangsa dan Politik Provinsi Kepri</p>
+        <p style="font-size: 13px; color: #64748b;">Pelaporan Pertanggungjawaban Partai Politik</p>
+        <div style="display: flex; justify-content: center; margin-top: 20px;">
+            <div id="g_id_onload"
+                 data-client_id="PASTE_CLIENT_ID_ANDA_DI_SINI"
+                 data-context="signin"
+                 data-callback="handleCredentialResponse">
+            </div>
+            <div class="g_id_signin" data-type="standard" data-shape="rectangular" data-theme="filled_blue" data-text="signin_with" data-size="large"></div>
+        </div>
+    </div>
+
+    <!-- SEKSI UPLOAD -->
+    <div id="uploadSection" class="hidden">
+        <h3>Unggah Dokumen LPJ Parpol</h3>
+        <p id="userWelcome" style="font-weight: bold; color: #0284c7;"></p>
+        <input type="file" id="filePicker" style="margin-bottom: 20px; width: 100%;">
+        <button id="submitBtn" onclick="initiateResumableUpload()">Kirim ke Google Drive</button>
+        <div id="progressArea" class="hidden">
+            <div class="progress"><div class="bar" id="progressBar"></div></div>
+            <p id="statusLabel" style="font-size: 13px; margin-top: 10px;">Menghubungkan...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    let accessToken = "";
+    const ALLOWED_USERS = []; // Biarkan kosong dulu untuk uji coba awal agar semua email bisa masuk
+
+    function handleCredentialResponse(response) {
+        const base64Url = response.credential.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        
+        const userProfile = JSON.parse(jsonPayload);
+
+        google.accounts.oauth2.initTokenClient({
+            client_id: 'PASTE_CLIENT_ID_ANDA_DI_SINI',
+            scope: 'https://www.googleapis.com/auth/drive.file',
+            callback: (tokenResponse) => {
+                accessToken = tokenResponse.access_token;
+                if (accessToken) {
+                    document.getElementById("loginSection").classList.add("hidden");
+                    document.getElementById("uploadSection").classList.remove("hidden");
+                    document.getElementById("userWelcome").innerText = "Operator: " + userProfile.name;
+                }
+            }
+        }).requestAccessToken();
+    }
+
+    async function initiateResumableUpload() {
+        const filePicker = document.getElementById("filePicker");
+        if (filePicker.files.length === 0) { alert("Pilih file!"); return; }
+
+        const file = filePicker.files[0];
+        const submitBtn = document.getElementById("submitBtn");
+        const progressArea = document.getElementById("progressArea");
+        const progressBar = document.getElementById("progressBar");
+        const statusLabel = document.getElementById("statusLabel");
+
+        submitBtn.disabled = true;
+        progressArea.classList.remove("hidden");
+
+        try {
+            const sessionResponse = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", {
+                method: "POST",
+                headers: {
+                    "Authorization": "Bearer " + accessToken,
+                    "Content-Type": "application/json; charset=UTF-8",
+                    "X-Upload-Content-Type": file.type,
+                    "X-Upload-Content-Length": file.size
+                },
+                body: JSON.stringify({ name: file.name, mimeType: file.type })
+            });
+
+            if (!sessionResponse.ok) throw new Error("Gagal inisiasi.");
+            const uploadLocationUrl = sessionResponse.headers.get("Location");
+            
+            const chunkSize = 1024 * 1024 * 5;
+            let startByte = 0;
+
+            while (startByte < file.size) {
+                const endByte = Math.min(startByte + chunkSize, file.size);
+                const chunk = file.slice(startByte, endByte);
+                statusLabel.innerText = "Mengirim data LPJ... (" + Math.round((startByte / file.size) * 100) + "%)";
+
+                const chunkResponse = await fetch(uploadLocationUrl, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Range": "bytes " + startByte + "-" + (endByte - 1) + "/" + file.size,
+                        "Content-Type": file.type
+                    },
+                    body: chunk
+                });
+
+                if (chunkResponse.status === 308) {
+                    startByte = endByte;
+                    progressBar.style.width = (startByte / file.size) * 100 + "%";
+                } else if (chunkResponse.ok) {
+                    progressBar.style.width = "100%";
+                    statusLabel.innerText = "Sukses Terunggah Berbasis Enkripsi!";
+                    statusLabel.style.color = "green";
+                    filePicker.value = "";
+                    submitBtn.disabled = false;
+                    break;
+                } else {
+                    throw new Error("Terputus.");
+                }
+            }
+        } catch (error) {
+            alert("Error: " + error.message);
+            statusLabel.innerText = "Gagal mengunggah.";
+            submitBtn.disabled = false;
+        }
+    }
+</script>
+</body>
+</html>
